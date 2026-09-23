@@ -1,0 +1,12 @@
+# Raw downloads: large, and must never be committed
+data/raw/
+
+# Python environment and cache (rebuild with `uv sync`)
+.venv/
+__pycache__/
+
+# Personal Anki study file, not part of the project
+flashcards.tsv
+
+# macOS
+.DS_Store
