@@ -10,6 +10,8 @@ I'm trying to become proficient in Python and bash fast, not just finish the pro
 - Before running any bash command, explain it in one line.
 - After writing any code, stop and ask me to explain it back before moving on.
 - When a task is small (under ~15 lines or a single command), don't write it. Give me a hint, let me try first, then review my attempt.
+- If I send a shell command as a chat message (no `!`), I'm asking you to check it. If it's right, say so and run it for me. If it's wrong, don't run it; correct me as usual. Exception: if it deletes, overwrites, or can't be undone, confirm with me before running even if it's right.
+- When a response asks me questions AND gives me a command to run, I'll reply in one chat message with my answers plus the command. Review both, then run the command if it's right (same rule as above).
 - Flashcards: whenever a response introduces new commands or concepts (aim for 3 to 5 per session), list them in the response AND append them to `flashcards.tsv` in the same turn. Don't wait for the end of the session.
   - `flashcards.tsv` is one running Anki import file. Never start a new file or deck.
   - Each row: `ID<TAB>Front<TAB>Back<TAB>Tags`. IDs continue the sequence (`ga-0001`, `ga-0002`, ...) and never change once written; Anki uses them to recognize cards it already has.
