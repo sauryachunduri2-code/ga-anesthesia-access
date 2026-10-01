@@ -3,5 +3,7 @@ name = "ga-anesthesia-access"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "openpyxl>=3.1.5",
     "pandas>=3.0.6",
+    "pyshp>=3.1.6",
 ]

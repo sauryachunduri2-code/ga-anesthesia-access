@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Georgia Anesthesia Access</title>
+<meta name="description" content="County-level map of anesthesia providers in Georgia, cross-referenced with hospitals that perform surgery and deliver babies.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f7f9;
+    --text: #1d2330;
+    --muted: #5b6475;
+    --border: #d5d9e0;
+    --county-line: #ffffff;
+    --zero: #e8a33d;
+    --ob-line: #7a1fa2;
+    --gap-line: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b;
+      --panel: #1b2029;
+      --text: #e7eaf0;
+      --muted: #9aa3b5;
+      --border: #2e3542;
+      --county-line: #12151b;
+      --zero: #d38d2a;
+      --ob-line: #ce93d8;
+      --gap-line: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header, main, footer { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+  header h1 { font-size: 1.6rem; margin: 24px 0 4px; }
+  header p { margin: 0 0 16px; color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .stat b { display: block; font-size: 1.5rem; }
+  .stat span { color: var(--muted); font-size: 0.85rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin-bottom: 12px; }
+  .controls label { cursor: pointer; }
+  select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .layout { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+  #map { height: 640px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  @media (max-width: 800px) { #map { height: 480px; } }
+  .side { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .side h2 { font-size: 1.1rem; margin: 0 0 8px; }
+  .side table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .side td { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .side td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { margin-top: 12px; font-size: 0.85rem; }
+  .legend div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .swatch { width: 18px; height: 14px; border-radius: 3px; flex: none; }
+  .line-swatch { width: 18px; height: 0; border-top: 3px solid; flex: none; }
+  .muted { color: var(--muted); }
+  footer { margin: 24px auto 40px; color: var(--muted); font-size: 0.9rem; }
+  a { color: inherit; }
+  .leaflet-container { font: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Georgia Anesthesia Access</h1>
+  <p>Anesthesia providers (anesthesiologists, CRNAs, anesthesiologist assistants) by county, alongside hospitals that perform surgery and deliver babies.</p>
+  <div class="stats" id="stats"></div>
+</header>
+
+<main>
+  <div class="controls">
+    <label>Color counties by
+      <select id="metric">
+        <option value="providers_per_100k">All providers per 100,000 residents</option>
+        <option value="total_providers">Number of providers</option>
+        <option value="physicians_per_100k">Physician anesthesiologists per 100,000</option>
+        <option value="also_serves_providers">Providers listing a secondary location here</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="showOb" checked> Outline counties with OB services</label>
+    <label><input type="checkbox" id="showGap" checked> Outline surgical-hospital counties with no providers</label>
+  </div>
+
+  <div class="layout">
+    <div id="map" role="img" aria-label="Map of Georgia counties shaded by anesthesia provider access"></div>
+    <aside class="side">
+      <h2 id="county-name">Select a county</h2>
+      <div id="county-detail" class="muted">Hover or tap a county to see its numbers.</div>
+      <div class="legend" id="legend"></div>
+    </aside>
+  </div>
+</main>
+
+<footer>
+  <p><b>Download the data:</b>
+    <a href="ga_county_dataset.csv" download>county dataset (CSV)</a> ·
+    <a href="ga_hospitals.csv" download>hospital list (CSV)</a></p>
+  <p>Sources: CMS NPPES NPI Registry (Sept 2026), HUD-USPS ZIP-County Crosswalk (Q2 2026), CMS Provider of Services file (Q2 2026),
+    Georgia DCH / State Office of Rural Health OB services map (Sept 2025), U.S. Census Bureau population estimates (Vintage 2025) and county boundaries (2023).
+    Providers are counted at their primary practice address. See the methodology document for every decision and limitation.</p>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// Sequential palette (light to dark) for counties with at least one provider
+const COLORS = ["#d6e6f5", "#9ecae1", "#5ea3cf", "#2a6fae", "#0b3d7a"];
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+const LABELS = {
+  providers_per_100k: "providers per 100k",
+  total_providers: "providers",
+  physicians_per_100k: "physicians per 100k",
+  also_serves_providers: "providers (secondary location)",
+};
+
+let counties, layer, breaks = [];
+const map = L.map("map", { zoomSnap: 0.25, attributionControl: false });
+
+// Quantile breaks among non-zero values, so each color holds about the same number of counties
+function makeBreaks(metric) {
+  const values = counties.features.map(f => f.properties[metric]).filter(v => v > 0).sort((a, b) => a - b);
+  const result = [];
+  for (let i = 1; i < COLORS.length; i++) result.push(values[Math.floor(i * values.length / COLORS.length)]);
+  return result;
+}
+
+function colorFor(value) {
+  if (value === 0) return css("--zero");
+  let i = 0;
+  while (i < breaks.length && value >= breaks[i]) i++;
+  return COLORS[i];
+}
+
+function style(feature) {
+  const p = feature.properties;
+  const metric = document.getElementById("metric").value;
+  const showOb = document.getElementById("showOb").checked;
+  const showGap = document.getElementById("showGap").checked;
+  let outline = { color: css("--county-line"), weight: 0.8 };
+  if (showOb && p.has_ob_services) outline = { color: css("--ob-line"), weight: 2.5 };
+  if (showGap && p.surgery_but_no_providers) outline = { color: css("--gap-line"), weight: 3 };
+  return { fillColor: colorFor(p[metric]), fillOpacity: 0.9, ...outline };
+}
+
+function showDetail(p) {
+  document.getElementById("county-name").textContent = p.county + " County";
+  const rows = [
+    ["Population (2025)", p.population_2025.toLocaleString()],
+    ["All anesthesia providers", p.total_providers],
+    ["  Anesthesiologists", p.physician_anesthesiologists],
+    ["  CRNAs", p.crnas],
+    ["  Anesthesiologist assistants", p.anesthesiologist_assistants],
+    ["Providers per 100,000", p.providers_per_100k],
+    ["Also serve here (secondary location)", p.also_serves_providers],
+    ["Hospitals", p.hospitals],
+    ["Hospitals that perform surgery", p.surgical_hospitals],
+    ["OB services (DCH)", p.has_ob_services ? "Yes" : "No"],
+    ["Critical Access Hospitals", p.critical_access_hospitals],
+  ];
+  document.getElementById("county-detail").innerHTML =
+    "<table>" + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("") + "</table>";
+}
+
+function drawLegend() {
+  const metric = document.getElementById("metric").value;
+  const fmt = (v) => metric === "total_providers" || metric === "also_serves_providers" ? Math.round(v) : v.toFixed(1);
+  let html = `<div><span class="swatch" style="background:${css("--zero")}"></span>0 ${LABELS[metric]}</div>`;
+  COLORS.forEach((c, i) => {
+    const lo = i === 0 ? "> 0" : fmt(breaks[i - 1]);
+    const hi = i < breaks.length ? "– " + fmt(breaks[i]) : "+";
+    html += `<div><span class="swatch" style="background:${c}"></span>${lo} ${hi}</div>`;
+  });
+  html += `<div><span class="line-swatch" style="border-color:${css("--ob-line")}"></span>County has OB services</div>`;
+  html += `<div><span class="line-swatch" style="border-color:${css("--gap-line")}"></span>Surgical hospital, no providers</div>`;
+  document.getElementById("legend").innerHTML = html;
+}
+
+function redraw() {
+  breaks = makeBreaks(document.getElementById("metric").value);
+  layer.setStyle(style);
+  // Draw outlined counties last so neighbors' borders don't cover their outlines
+  const showOb = document.getElementById("showOb").checked;
+  const showGap = document.getElementById("showGap").checked;
+  layer.eachLayer(l => { if (showOb && l.feature.properties.has_ob_services) l.bringToFront(); });
+  layer.eachLayer(l => { if (showGap && l.feature.properties.surgery_but_no_providers) l.bringToFront(); });
+  drawLegend();
+}
+
+function drawStats() {
+  const f = counties.features.map(x => x.properties);
+  const sum = (k) => f.reduce((a, p) => a + Number(p[k]), 0);
+  const stats = [
+    [sum("total_providers").toLocaleString(), "anesthesia providers in Georgia"],
+    [f.filter(p => p.no_providers).length + " of 159", "counties with no provider at a primary practice address"],
+    [f.filter(p => p.surgery_but_no_providers).length, "counties with a surgical hospital but no provider"],
+    [f.filter(p => p.ob_but_no_physician).length, "OB counties with no physician anesthesiologist"],
+  ];
+  document.getElementById("stats").innerHTML =
+    stats.map(s => `<div class="stat"><b>${s[0]}</b><span>${s[1]}</span></div>`).join("");
+}
+
+fetch("ga_counties.geojson")
+  .then(r => r.json())
+  .then(data => {
+    counties = data;
+    layer = L.geoJSON(counties, {
+      style,
+      onEachFeature: (feature, lyr) => {
+        lyr.on({ mouseover: () => showDetail(feature.properties), click: () => showDetail(feature.properties) });
+      },
+    }).addTo(map);
+    map.fitBounds(layer.getBounds());
+    drawStats();
+    redraw();
+  });
+
+["metric", "showOb", "showGap"].forEach(id => document.getElementById(id).addEventListener("change", redraw));
+</script>
+</body>
+</html>
