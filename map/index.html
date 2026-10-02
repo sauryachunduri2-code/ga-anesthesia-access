@@ -17,6 +17,10 @@
     --zero: #e8a33d;
     --ob-line: #7a1fa2;
     --gap-line: #c62828;
+    --good: #2e7d32;
+    --bar: #2a6fae;
+    --track: #e4e8ee;
+    --selected: #1d2330;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -29,6 +33,10 @@
       --zero: #d38d2a;
       --ob-line: #ce93d8;
       --gap-line: #ff6b6b;
+      --good: #81c784;
+      --bar: #5ea3cf;
+      --track: #262c37;
+      --selected: #ffffff;
     }
   }
   * { box-sizing: border-box; }
@@ -62,6 +70,31 @@
   .swatch { width: 18px; height: 14px; border-radius: 3px; flex: none; }
   .line-swatch { width: 18px; height: 0; border-top: 3px solid; flex: none; }
   .muted { color: var(--muted); }
+  /* Advanced statistics panel */
+  .stats-panel { margin-top: 28px; }
+  .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .panel-head h2 { font-size: 1.3rem; margin: 0; }
+  .panel-head button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+  .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .card.wide { grid-column: 1 / -1; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+  .card h3 { font-size: 0.95rem; margin: 0 0 10px; }
+  .card p.note { margin: 8px 0 0; color: var(--muted); font-size: 0.8rem; }
+  .bar-row { display: grid; grid-template-columns: minmax(90px, 40%) 1fr auto; align-items: center; gap: 8px; margin: 6px 0; font-size: 0.85rem; }
+  .bar-track { height: 12px; background: var(--track); border-radius: 0 4px 4px 0; }
+  .bar-fill { height: 100%; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar-row .val { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bar-row:hover .bar-fill { filter: brightness(1.15); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font: inherit; font-size: 0.8rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+  .flag { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 0.9rem; }
+  .flag .icon { flex: none; width: 20px; text-align: center; font-weight: 700; }
+  .flag.bad .icon { color: var(--gap-line); }
+  .flag.ok .icon { color: var(--good); }
+  .hosp { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .hosp th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); padding: 4px 4px 4px 0; }
+  .hosp td { padding: 4px 4px 4px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .table-wrap { overflow-x: auto; }
   footer { margin: 24px auto 40px; color: var(--muted); font-size: 0.9rem; }
   a { color: inherit; }
   .leaflet-container { font: inherit; }
@@ -96,6 +129,15 @@
       <div class="legend" id="legend"></div>
     </aside>
   </div>
+
+  <section class="stats-panel" aria-live="polite">
+    <div class="panel-head">
+      <h2 id="panel-title">Advanced statistics: Georgia</h2>
+      <button id="panel-back" hidden>&larr; Back to statewide</button>
+    </div>
+    <p class="muted" id="panel-hint" style="margin:-6px 0 12px">Click any county on the map to see its statistics here.</p>
+    <div class="panel-grid" id="panel-body"></div>
+  </section>
 </main>
 
 <footer>
@@ -121,6 +163,7 @@ const LABELS = {
 };
 
 let counties, layer, breaks = [];
+let selectedFips = null;  // county picked by clicking, or null for statewide
 const map = L.map("map", { zoomSnap: 0.25, attributionControl: false });
 
 // Quantile breaks among non-zero values, so each color holds about the same number of counties
@@ -146,6 +189,7 @@ function style(feature) {
   let outline = { color: css("--county-line"), weight: 0.8 };
   if (showOb && p.has_ob_services) outline = { color: css("--ob-line"), weight: 2.5 };
   if (showGap && p.surgery_but_no_providers) outline = { color: css("--gap-line"), weight: 3 };
+  if (p.county_fips === selectedFips) outline = { color: css("--selected"), weight: 4 };
   return { fillColor: colorFor(p[metric]), fillOpacity: 0.9, ...outline };
 }
 
@@ -190,8 +234,174 @@ function redraw() {
   const showGap = document.getElementById("showGap").checked;
   layer.eachLayer(l => { if (showOb && l.feature.properties.has_ob_services) l.bringToFront(); });
   layer.eachLayer(l => { if (showGap && l.feature.properties.surgery_but_no_providers) l.bringToFront(); });
+  layer.eachLayer(l => { if (l.feature.properties.county_fips === selectedFips) l.bringToFront(); });
   drawLegend();
 }
+
+// ---------- Advanced statistics panel ----------
+
+const TYPES = [
+  ["anesthesiologists", "Anesthesiologists"],
+  ["pediatric_anesthesiologists", "Pediatric anesthesiologists"],
+  ["crnas", "CRNAs"],
+  ["anesthesiologist_assistants", "Anesthesiologist assistants"],
+];
+const num = (v) => Number(v).toLocaleString();
+const all = () => counties.features.map(f => f.properties);
+
+// Rank 1 = highest value; tied counties share a rank
+function rankOf(p, key) {
+  return 1 + all().filter(q => Number(q[key]) > Number(p[key])).length;
+}
+
+// "#12 of 159", or "tied for last" for counties with a value of 0
+function rankText(p, key) {
+  if (Number(p[key]) === 0) return `tied for last with ${all().filter(q => Number(q[key]) === 0).length} counties`;
+  return `#${rankOf(p, key)} of 159`;
+}
+
+function median(values) {
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Horizontal bars: rows = [label, value, text shown at the end of the bar]
+function bars(rows, max) {
+  return rows.map(([label, value, shown]) => {
+    const pct = max > 0 ? (value / max) * 100 : 0;
+    return `<div class="bar-row" title="${label}: ${shown}">
+      <span>${label}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <span class="val">${shown}</span>
+    </div>`;
+  }).join("");
+}
+
+const tile = (big, small) => `<div class="stat"><b>${big}</b><span>${small}</span></div>`;
+const card = (title, inner, note, wide) =>
+  `<div class="card${wide ? " wide" : ""}"><h3>${title}</h3>${inner}${note ? `<p class="note">${note}</p>` : ""}</div>`;
+const chips = (list) => list.length
+  ? `<div class="chips">${list.map(p => `<button class="chip" data-fips="${p.county_fips}">${p.county}</button>`).join("")}</div>`
+  : `<span class="muted">None</span>`;
+
+function stateTotals() {
+  const f = all();
+  const sum = (k) => f.reduce((a, p) => a + Number(p[k]), 0);
+  const total = sum("total_providers");
+  const pop = sum("population_2025");
+  return { f, sum, total, pop, rate: total / pop * 100000 };
+}
+
+function renderStatewide() {
+  const { f, sum, total, pop, rate } = stateTotals();
+  const physicians = sum("physician_anesthesiologists");
+  const top5 = [...f].sort((a, b) => b.total_providers - a.total_providers).slice(0, 5);
+  const top5Share = top5.reduce((a, p) => a + p.total_providers, 0) / total * 100;
+
+  // How many counties fall in each rate range
+  const ranges = [["0 (none)", 0, 0], ["Under 10", 0.0001, 10], ["10 to 25", 10, 25],
+                  ["25 to 50", 25, 50], ["50 to 100", 50, 100], ["100 or more", 100, Infinity]];
+  const rangeRows = ranges.map(([label, lo, hi]) => {
+    const n = f.filter(p => hi === 0 ? p.providers_per_100k === 0
+                                     : p.providers_per_100k >= lo && p.providers_per_100k < hi).length;
+    return [label, n, `${n} counties`];
+  });
+
+  const topRate = [...f].sort((a, b) => b.providers_per_100k - a.providers_per_100k).slice(0, 10);
+
+  document.getElementById("panel-body").innerHTML = [
+    card("At a glance", `<div class="stats" style="margin:0">
+      ${tile(rate.toFixed(1), "providers per 100,000 Georgians")}
+      ${tile(median(f.map(p => p.providers_per_100k)).toFixed(1), "median county rate (half of counties are lower)")}
+      ${tile(top5Share.toFixed(0) + "%", "of providers are in just 5 counties")}
+      ${tile(((sum("crnas") + sum("anesthesiologist_assistants")) / physicians).toFixed(1),
+             "CRNAs + AAs per physician anesthesiologist")}
+    </div>`, "", true),
+    card("Who provides anesthesia", bars(TYPES.map(([k, label]) => {
+      const n = sum(k);
+      return [label, n, `${num(n)} (${(n / total * 100).toFixed(0)}%)`];
+    }), Math.max(...TYPES.map(([k]) => sum(k)))), `${num(total)} individual providers at a Georgia primary practice address.`),
+    card("Counties by providers per 100,000", bars(rangeRows, Math.max(...rangeRows.map(r => r[1]))),
+         `${f.filter(p => p.no_providers).length} counties (${num(f.filter(p => p.no_providers).reduce((a, p) => a + p.population_2025, 0))} residents) have no provider based there.`),
+    card("Highest rates (top 10 counties)", bars(topRate.map(p =>
+      [p.county, p.providers_per_100k, `${p.providers_per_100k} (${num(p.total_providers)})`]),
+      topRate[0].providers_per_100k), "Per 100,000 residents (provider count in brackets). Small counties with one large hospital can rank high."),
+    card("Hospitals", `<div class="stats" style="margin:0">
+      ${tile(sum("hospitals"), "active hospitals (CMS)")}
+      ${tile(sum("surgical_hospitals"), "perform surgery")}
+      ${tile(f.filter(p => p.has_ob_services).length, "counties with OB services (DCH)")}
+      ${tile(sum("critical_access_hospitals"), "Critical Access Hospitals")}
+    </div>`, "", true),
+    card("Coverage gaps (click a county)", `
+      <p style="margin:0 0 6px"><b>Surgical hospital, no provider based in county</b></p>${chips(f.filter(p => p.surgery_but_no_providers))}
+      <p style="margin:12px 0 6px"><b>OB services, no physician anesthesiologist</b></p>${chips(f.filter(p => p.ob_but_no_physician))}
+      <p style="margin:12px 0 6px"><b>Critical Access Hospital, no provider based in county</b></p>${chips(f.filter(p => p.no_providers && p.critical_access_hospitals > 0))}`,
+      "Providers who travel in from other counties are not counted here; see the methodology."),
+  ].join("");
+}
+
+function renderCounty(p) {
+  const { rate } = stateTotals();
+  const ratio = rate > 0 ? p.providers_per_100k / rate : 0;
+  const compare = p.total_providers === 0 ? "no providers based here"
+    : ratio >= 1 ? `${ratio.toFixed(1)}× the state rate` : `${(ratio * 100).toFixed(0)}% of the state rate`;
+
+  const flags = [];
+  if (p.no_providers) flags.push(["bad", "!", "No anesthesia provider lists this county as their primary practice location."]);
+  if (p.surgery_but_no_providers) flags.push(["bad", "!", "Has a hospital that performs surgery but no provider based in the county; anesthesia likely comes from providers based elsewhere."]);
+  if (p.ob_but_no_physician) flags.push(["bad", "!", "Delivers babies but has no physician anesthesiologist based in the county."]);
+  if (p.has_ob_services) flags.push(["ok", "✓", "Has CON-authorized obstetric services (Georgia DCH, Sept 2025)."]);
+  if (p.also_serves_providers > 0) flags.push(["ok", "+", `${p.also_serves_providers} provider(s) based elsewhere list a secondary practice location here.`]);
+  if (!flags.length) flags.push(["ok", "–", "No hospitals and no coverage flags."]);
+
+  const hospitals = p.hospital_list.length
+    ? `<div class="table-wrap"><table class="hosp"><thead><tr><th>Hospital</th><th>Type</th><th>Beds</th><th>Surgery</th></tr></thead><tbody>
+       ${p.hospital_list.map(h => `<tr><td>${h.name}<br><span class="muted">${h.city}</span></td><td>${h.type}</td><td>${h.beds || "–"}</td><td>${h.surgery ? "Yes" : "No"}</td></tr>`).join("")}
+       </tbody></table></div>`
+    : `<span class="muted">No active hospital in the CMS file.</span>`;
+
+  document.getElementById("panel-body").innerHTML = [
+    card("At a glance", `<div class="stats" style="margin:0">
+      ${tile(num(p.total_providers), `providers (${rankText(p, "total_providers")})`)}
+      ${tile(p.providers_per_100k, `per 100,000 residents (${rankText(p, "providers_per_100k")}), ${compare}`)}
+      ${tile(num(p.population_2025), "residents (2025)")}
+      ${tile(num(p.births_2025), "births (2025)")}
+    </div>`, "", true),
+    card("Who provides anesthesia here", p.total_providers
+      ? bars(TYPES.map(([k, label]) => [label, p[k], num(p[k])]), Math.max(...TYPES.map(([k]) => p[k])))
+      : `<span class="muted">No providers at a primary practice address in this county.</span>`),
+    card("Coverage", flags.map(([cls, icon, text]) =>
+      `<div class="flag ${cls}"><span class="icon" aria-hidden="true">${icon}</span><span>${text}</span></div>`).join("")),
+    card("Hospitals in this county", hospitals, "Surgery = CMS inpatient surgical services code (Q2 2026)."),
+  ].join("");
+}
+
+function selectCounty(fips) {
+  selectedFips = fips;
+  const back = document.getElementById("panel-back");
+  if (fips) {
+    const p = all().find(q => q.county_fips === fips);
+    document.getElementById("panel-title").textContent = `Advanced statistics: ${p.county} County`;
+    back.hidden = false;
+    document.getElementById("panel-hint").textContent = "Click another county to switch, or click this one again to go back to statewide.";
+    showDetail(p);
+    renderCounty(p);
+  } else {
+    document.getElementById("panel-title").textContent = "Advanced statistics: Georgia";
+    back.hidden = true;
+    document.getElementById("panel-hint").textContent = "Click any county on the map to see its statistics here.";
+    renderStatewide();
+  }
+  redraw();
+}
+
+document.getElementById("panel-back").addEventListener("click", () => selectCounty(null));
+// Clicking a county chip in the gaps card selects that county and scrolls up to the map
+document.getElementById("panel-body").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (chip) { selectCounty(chip.dataset.fips); document.getElementById("map").scrollIntoView({ behavior: "smooth" }); }
+});
 
 function drawStats() {
   const f = counties.features.map(x => x.properties);
@@ -213,12 +423,16 @@ fetch("ga_counties.geojson")
     layer = L.geoJSON(counties, {
       style,
       onEachFeature: (feature, lyr) => {
-        lyr.on({ mouseover: () => showDetail(feature.properties), click: () => showDetail(feature.properties) });
+        lyr.on({
+          mouseover: () => showDetail(feature.properties),
+          // Clicking the selected county again goes back to statewide
+          click: () => selectCounty(feature.properties.county_fips === selectedFips ? null : feature.properties.county_fips),
+        });
       },
     }).addTo(map);
     map.fitBounds(layer.getBounds());
     drawStats();
-    redraw();
+    selectCounty(null);
   });
 
 ["metric", "showOb", "showGap"].forEach(id => document.getElementById(id).addEventListener("change", redraw));

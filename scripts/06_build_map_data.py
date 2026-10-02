@@ -12,6 +12,7 @@ Outputs:
 import io
 import json
 import shutil
+import string
 import zipfile
 
 import pandas as pd
@@ -62,12 +63,25 @@ def round_coords(coords):
 
 
 rows = data.set_index("county_fips").to_dict(orient="index")
+
+# Each county's hospitals, so clicking a county on the map can list them
+hospital_list = pd.read_csv(HOSPITAL_LIST_PATH, dtype=str)
+hospitals_by_county = {}
+for h in hospital_list.itertuples():
+    hospitals_by_county.setdefault(h.county_fips, []).append({
+        "name": string.capwords(h.name),  # capwords keeps "Joseph's" (title() gives "Joseph'S")
+        "city": string.capwords(h.city),
+        "type": h.hospital_type,
+        "beds": h.beds,
+        "surgery": h.performs_surgery == "True",
+    })
+
 features = []
 for sr in shapes:
     fips = sr.record["GEOID"]
     geometry = sr.shape.__geo_interface__
     geometry["coordinates"] = round_coords(geometry["coordinates"])
-    props = {"county_fips": fips, **rows[fips]}
+    props = {"county_fips": fips, **rows[fips], "hospital_list": hospitals_by_county.get(fips, [])}
     features.append({"type": "Feature", "properties": props, "geometry": geometry})
 
 assert len(features) == 159, "expected 159 county shapes"
